@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jump Space Power Grid Optimizer (local)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>Jump Space Power Grid Optimizer</h1>
+  <p class="subtitle">Runs entirely in your browser. No server, no external API. Edit <code>data/shapes.js</code> whenever the game changes a shape.</p>
+</header>
+
+<main>
+
+  <section class="panel" id="reactor-panel">
+    <h2>1. Reactor &amp; Generators</h2>
+    <p class="hint">Pick one reactor (4 rows) and up to two generators (2 rows each) to build the 8&times;8 grid. Order doesn't matter — reactors are always stacked above generators.</p>
+    <div class="list" id="reactor-list"></div>
+    <div class="row-total" id="row-total"></div>
+  </section>
+
+  <section class="panel" id="grid-panel">
+    <h2>2. Grid preview</h2>
+    <div class="grid" id="preview-grid"></div>
+    <div class="legend">
+      <span><i class="swatch open"></i> open</span>
+      <span><i class="swatch shielded"></i> shielded</span>
+      <span><i class="swatch blocked"></i> blocked</span>
+    </div>
+  </section>
+
+  <section class="panel" id="component-panel">
+    <h2>3. Components</h2>
+    <p class="hint">Click a component to add one to your loadout. Click it again to add another copy.</p>
+    <div class="list" id="component-list"></div>
+  </section>
+
+  <section class="panel" id="selected-panel">
+    <h2>4. Your loadout</h2>
+    <div class="list" id="selected-list"></div>
+    <button id="solve-btn" class="primary">Check if this fits</button>
+  </section>
+
+  <section class="panel" id="result-panel" hidden>
+    <h2>Result</h2>
+    <div id="result-summary"></div>
+    <div class="grid" id="result-grid"></div>
+    <div class="legend" id="result-legend"></div>
+  </section>
+
+</main>
+
+<footer>
+  <p>Shape data and layout mirror the community tool at
+     <a href="https://jump-space-grid-optimizer.vercel.app/" target="_blank" rel="noopener">jump-space-grid-optimizer.vercel.app</a>
+     as of the shapes captured in <code>data/shapes.js</code>. See <code>README.md</code> for how to keep this current.</p>
+</footer>
+
+<script src="data/shapes.js"></script>
+<script src="solver.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
