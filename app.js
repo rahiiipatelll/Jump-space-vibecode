@@ -57,16 +57,43 @@
     return { grid, totalRows: ordered.reduce((s, p) => s + p.matrix.length, 0), overflow };
   }
 
-  function renderGridInto(container, grid, pieceColorFor) {
+  // True if the cell at (r, c) belongs to the same placed piece `id`
+  // (used to figure out which edges of a piece's footprint are "outer"
+  // edges — i.e. touch something else — versus internal joins between
+  // two cells of the same piece).
+  function sameOwner(grid, r, c, id) {
+    if (r < 0 || r >= grid.length || c < 0 || c >= grid[0].length) return false;
+    return grid[r][c] === id;
+  }
+
+  // `backgroundGrid` is optional and only matters for a SOLVED grid: once a
+  // piece is stamped over a cell, the cell's own value no longer says
+  // whether it used to be shielded. Passing the original background lets us
+  // mark those cells (a small white dot, high-contrast against any piece
+  // color) so shielded coverage stays visible even once it's hidden
+  // underneath a component's color.
+  function renderGridInto(container, grid, pieceColorFor, backgroundGrid) {
     container.innerHTML = "";
     for (let r = 0; r < grid.length; r++) {
       for (let c = 0; c < grid[r].length; c++) {
         const v = grid[r][c];
         const cell = document.createElement("div");
         if (v > 0) {
-          cell.className = "cell piece";
+          const onShield = backgroundGrid && backgroundGrid[r][c] === -2;
+          cell.className = "cell piece" + (onShield ? " on-shield" : "");
           cell.style.background = pieceColorFor(v);
           cell.textContent = v;
+          if (onShield) cell.title = "On a shielded slot";
+
+          // Outline only the OUTER edges of each piece's footprint (skip
+          // the border between two cells of the same piece) so multi-cell
+          // components read as one clearly-bounded shape at a glance,
+          // in a color distinct from — but paired with — its fill color.
+          const outline = `2px solid ${outlineColorForPieceId(v)}`;
+          cell.style.borderTop = sameOwner(grid, r - 1, c, v) ? "none" : outline;
+          cell.style.borderBottom = sameOwner(grid, r + 1, c, v) ? "none" : outline;
+          cell.style.borderLeft = sameOwner(grid, r, c - 1, v) ? "none" : outline;
+          cell.style.borderRight = sameOwner(grid, r, c + 1, v) ? "none" : outline;
         } else {
           cell.className = "cell " + cellClass(v);
         }
@@ -77,6 +104,18 @@
 
   const PIECE_COLORS = ["#e05252", "#e0a852", "#d9d652", "#7fd952", "#52d9c5", "#5279d9", "#a552d9", "#d952a0"];
   function colorForPieceId(id) { return PIECE_COLORS[(id - 1) % PIECE_COLORS.length]; }
+
+  // Each piece's outline is a darkened version of its own fill color —
+  // "unique per piece" like the fill, but dark enough to stay visible even
+  // when the fill color itself is close to the shielded-slot blue.
+  function darken(hex, factor) {
+    const num = parseInt(hex.slice(1), 16);
+    const r = Math.round(((num >> 16) & 255) * factor);
+    const g = Math.round(((num >> 8) & 255) * factor);
+    const b = Math.round((num & 255) * factor);
+    return "#" + [r, g, b].map(x => x.toString(16).padStart(2, "0")).join("");
+  }
+  function outlineColorForPieceId(id) { return darken(colorForPieceId(id), 0.5); }
 
   // ---- reactor / generator panel -------------------------------------
   function renderReactorList() {
@@ -207,20 +246,34 @@
     const legendEl = document.getElementById("result-legend");
     legendEl.innerHTML = "";
 
+    const shieldStatsEl = document.getElementById("shield-stats");
+
     if (result.feasible) {
       summary.className = "feasible";
-      summary.textContent = `✅ Yes — all ${instances.length} components fit. (search explored ${result.nodesExplored} arrangement${result.nodesExplored === 1 ? "" : "s"})`;
-      renderGridInto(resultGridEl, result.resultGrid, colorForPieceId);
+      const optimalNote = result.optimal
+        ? "shielding fully optimized"
+        : "search budget ran out — best layout found, not guaranteed the most-shielded possible";
+      summary.textContent = `✅ Yes — all ${instances.length} components fit. (${optimalNote}, ${result.nodesExplored} arrangement${result.nodesExplored === 1 ? "" : "s"} explored)`;
+      renderGridInto(resultGridEl, result.resultGrid, colorForPieceId, grid);
       for (const entry of result.legend) {
         const span = document.createElement("span");
         const swatch = document.createElement("i");
         swatch.className = "swatch";
         swatch.style.background = colorForPieceId(entry.id);
+        swatch.style.boxShadow = `inset 0 0 0 2px ${outlineColorForPieceId(entry.id)}`;
         span.appendChild(swatch);
         span.appendChild(document.createTextNode(`${entry.id}: ${entry.name}`));
         legendEl.appendChild(span);
       }
+
+      const { total, covered, percent } = result.shieldStats;
+      shieldStatsEl.hidden = false;
+      shieldStatsEl.textContent = total === 0
+        ? "This grid has no shielded slots at all."
+        : `Shielded slots covered by components: ${covered} / ${total} (${percent}%). ` +
+          `A small white dot on a numbered cell above marks a component sitting on a shielded slot.`;
     } else {
+      shieldStatsEl.hidden = true;
       summary.className = "infeasible";
       resultGridEl.innerHTML = "";
       if (result.unplaceable && result.unplaceable.length) {

@@ -19,17 +19,28 @@
  * binary matrix ("1" = must sit on a non-blocked cell, "0" = empty space
  * inside its own bounding box). A component may be rotated in 90-degree
  * steps (unless you've restricted that in shapes.js). No two components
- * may share a cell. Question: does ANY arrangement exist that places
- * every selected component? If yes, show one.
+ * may share a cell.
  *
- * This is a 2D packing / constraint-satisfaction problem, not something
- * solvable by a formula — so this file does a backtracking search:
- * repeatedly pick the component that currently has the fewest legal
- * spots left (this is the classic "most constrained variable first"
- * heuristic — it makes dead ends surface almost immediately instead of
- * after exploring huge unrelated branches) and try each of its legal
- * placements, undoing and trying the next if a later component gets
- * stuck. It stops the moment it finds one full valid layout.
+ * There are actually two questions, not one:
+ *   1. Does ANY arrangement exist that places every selected component?
+ *   2. Among all such arrangements, which one uses the most shielded
+ *      (-2) cells — since shielded cells are immune to the random
+ *      power-loss events the game throws at your grid, more shielded
+ *      coverage means fewer things randomly cut out mid-fight?
+ *
+ * This is a 2D packing / constraint-satisfaction-with-an-objective
+ * problem, not something solvable by a formula — so this file does a
+ * branch-and-bound backtracking search: repeatedly pick the component
+ * that currently has the fewest legal spots left (this is the classic
+ * "most constrained variable first" heuristic — it makes dead ends
+ * surface almost immediately instead of after exploring huge unrelated
+ * branches), try each of its legal placements best-shielded-first, and
+ * keep searching even after finding a valid layout — because a *better*
+ * (more-shielded) layout might still be out there. It prunes any branch
+ * that provably can't beat the best layout found so far, and stops
+ * early only when it runs out of search budget, in which case it still
+ * hands back the best layout it found (just not provably the best
+ * possible one — see `optimal` in the result).
  * ---------------------------------------------------------------------
  */
 
@@ -85,6 +96,12 @@
     return { cells, height: matrix.length, width: matrix[0].length };
   }
 
+  // A component with "prefer shielded" ticked gets its shielded-cell
+  // coverage weighted this much more heavily in the optimizer's scoring,
+  // so any leftover shielded capacity gets spent on flagged components
+  // first, before it's used to (also, for free) shield anything else.
+  const SHIELD_PRIORITY_WEIGHT = 1000;
+
   /**
    * Every legal placement of one piece against the CURRENT occupancy grid.
    * A placement is legal if every filled cell lands inside the grid, on a
@@ -108,16 +125,18 @@
             if (bg === -2) shieldCount++;
             absoluteCells.push({ r, c });
           }
-          if (ok) placements.push({ cells: absoluteCells, shieldCount });
+          if (ok) {
+            const weight = piece.preferShield ? SHIELD_PRIORITY_WEIGHT : 1;
+            placements.push({ cells: absoluteCells, shieldCount, weightedShield: shieldCount * weight });
+          }
         }
       }
     }
-    // If this piece prefers shielded cells, try those placements first —
-    // this is purely a search-order hint (find a "nicer" solution sooner),
-    // it never affects whether a solution is found at all.
-    if (piece.preferShield) {
-      placements.sort((a, b) => b.shieldCount - a.shieldCount);
-    }
+    // Try the best-for-shielding placements first. This is a search-order
+    // hint, not a hard rule: it makes the optimizer land on a good answer
+    // early (which also makes pruning kick in sooner), it never decides
+    // what counts as "best" — the score comparison in solve() does that.
+    placements.sort((a, b) => b.weightedShield - a.weightedShield);
     return placements;
   }
 
@@ -127,19 +146,23 @@
    *        { id, name, matrix, allowedRotations?, preferShield? }
    *        Include the same component twice if you're placing two copies.
    * @param {Object} [options]
-   * @param {number} [options.maxNodes=300000]  safety cap on search steps
+   * @param {number} [options.maxNodes=500000]  safety cap on search steps
    * @returns {{
    *   feasible: boolean,
    *   resultGrid?: number[][],      // background with pieces stamped in as (index+1)
    *   legend?: Array<{id:number,name:string}>,
+   *   optimal?: boolean,            // true = proven best possible shield coverage;
+   *                                 // false = search budget ran out first, this is
+   *                                 // just the best layout found so far
+   *   shieldStats?: { total: number, covered: number, percent: number|null },
    *   limitReached?: boolean,
    *   unplaceable?: string[],       // pieces that don't fit the grid at all, ignoring other pieces
-   *   stuckOn?: string,             // best-effort hint: where a full search failed
+   *   stuckOn?: string,             // best-effort hint: where the search kept failing
    *   nodesExplored: number
    * }}
    */
   function solve(background, componentInstances, options) {
-    const maxNodes = (options && options.maxNodes) || 300000;
+    const maxNodes = (options && options.maxNodes) || 500000;
     const rows = background.length, cols = background[0].length;
 
     const pieces = componentInstances.map((c, idx) => ({
@@ -163,65 +186,106 @@
 
     const occupied = Array.from({ length: rows }, () => new Array(cols).fill(null));
     const placedAt = new Array(pieces.length).fill(null);
+    const placedWeightedShield = new Array(pieces.length).fill(0);
+
     let nodesExplored = 0;
     let limitReached = false;
     let deepestStuckPiece = null;
 
-    function place(cells, pieceIndex) {
-      for (const { r, c } of cells) occupied[r][c] = pieceIndex;
-    }
-    function unplace(cells) {
-      for (const { r, c } of cells) occupied[r][c] = null;
+    let bestScore = -1;
+    let bestPlacedAt = null;
+
+    function place(cells, pieceIndex) { for (const { r, c } of cells) occupied[r][c] = pieceIndex; }
+    function unplace(cells) { for (const { r, c } of cells) occupied[r][c] = null; }
+
+    function currentScore() {
+      let total = 0;
+      for (const w of placedWeightedShield) total += w;
+      return total;
     }
 
+    function recordIfBest() {
+      const score = currentScore();
+      if (score > bestScore) {
+        bestScore = score;
+        bestPlacedAt = placedAt.map(cells => cells.slice());
+      }
+    }
+
+    // Unlike a plain feasibility search, this does NOT stop at the first
+    // full layout it finds — a better (more-shielded) one might still be
+    // out there. It keeps exploring, but prunes hard: at every node it
+    // computes an upper bound on the best score reachable from here (what
+    // we've already locked in, plus the best-case shielding every
+    // remaining piece could still add), and abandons the branch the
+    // moment that bound can't beat the best full layout found so far.
     function backtrack(remainingIndices) {
-      if (nodesExplored > maxNodes) { limitReached = true; return false; }
-      if (remainingIndices.length === 0) return true;
+      if (nodesExplored > maxNodes) { limitReached = true; return; }
+      if (remainingIndices.length === 0) { recordIfBest(); return; }
 
-      // Most-constrained-variable: try the piece with the fewest legal
-      // spots left first, so hopeless branches die fast.
-      let bestPos = -1, bestPlacements = null;
+      const optionsByPiece = new Map();
+      let bound = currentScore();
+      let bestPos = -1, fewestCount = Infinity;
+
       for (let i = 0; i < remainingIndices.length; i++) {
         const p = pieces[remainingIndices[i]];
         const placements = candidatePlacements(p, background, occupied);
         if (placements.length === 0) {
           deepestStuckPiece = p.name;
-          return false; // this piece has nowhere left to go — dead end
+          return; // dead end down this branch — backtrack to try something else
         }
-        if (!bestPlacements || placements.length < bestPlacements.length) {
+        optionsByPiece.set(remainingIndices[i], placements);
+        bound += placements[0].weightedShield; // best-case contribution (list is sorted)
+        if (placements.length < fewestCount) {
+          fewestCount = placements.length;
           bestPos = i;
-          bestPlacements = placements;
-          if (placements.length === 1) break; // can't do better than "forced"
         }
       }
+
+      if (bound <= bestScore) return; // can't beat the best we already have — prune
 
       const pieceIndex = remainingIndices[bestPos];
       const rest = remainingIndices.slice(0, bestPos).concat(remainingIndices.slice(bestPos + 1));
+      const placements = optionsByPiece.get(pieceIndex);
 
-      for (const placement of bestPlacements) {
+      for (const placement of placements) {
+        if (nodesExplored > maxNodes) { limitReached = true; return; }
         nodesExplored++;
         place(placement.cells, pieceIndex);
         placedAt[pieceIndex] = placement.cells;
-        if (backtrack(rest)) return true;
+        placedWeightedShield[pieceIndex] = placement.weightedShield;
+        backtrack(rest);
         unplace(placement.cells);
         placedAt[pieceIndex] = null;
-        if (limitReached) return false;
+        placedWeightedShield[pieceIndex] = 0;
+        if (limitReached) return;
       }
-      return false;
     }
 
-    const allIndices = pieces.map((_, i) => i);
-    const found = backtrack(allIndices);
+    backtrack(pieces.map((_, i) => i));
 
-    if (found) {
+    if (bestPlacedAt) {
       const resultGrid = background.map(row => row.slice());
       for (let i = 0; i < pieces.length; i++) {
-        for (const { r, c } of placedAt[i]) resultGrid[r][c] = i + 1;
+        for (const { r, c } of bestPlacedAt[i]) resultGrid[r][c] = i + 1;
       }
+
+      let total = 0, covered = 0;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (background[r][c] === -2) {
+            total++;
+            if (resultGrid[r][c] > 0) covered++;
+          }
+        }
+      }
+
       return {
         feasible: true,
         resultGrid,
         legend: pieces.map((p, i) => ({ id: i + 1, name: p.name })),
+        optimal: !limitReached,
+        shieldStats: { total, covered, percent: total === 0 ? null : Math.round((covered / total) * 100) },
         nodesExplored
       };
     }

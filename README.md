@@ -50,7 +50,7 @@ generators, 2 rows each). Cell values:
 |---|---|
 | `0`  | open / powered cell — a component can sit here |
 | `-1` | blocked — nothing can be placed here |
-| `-2` | shielded / protected cell — also usable, but "special" |
+| `-2` | shielded / protected cell — also usable, and immune to random power loss (see below) |
 
 **Components** are small binary matrices:
 
@@ -79,25 +79,40 @@ in-game grid.
 
 This is a classic 2D packing / constraint-satisfaction problem — there's
 no formula for "will N irregular shapes fit in a grid with holes," so it
-does a **backtracking search**:
+does a **backtracking search**. But it's not just a yes/no search: among
+every arrangement that fits, it also tries to find the one that covers
+the most shielded (`-2`) slots, since those are immune to the random
+power-loss events the game throws at your grid (see below). So it's a
+small branch-and-bound optimizer:
 
 1. For each component, precompute every legal placement (position +
-   rotation) against the *current* board state.
+   rotation) against the *current* board state, sorted best-shielded-first.
 2. Pick whichever unplaced component currently has the **fewest** legal
-   spots left, and try each of them in turn (this "most constrained
-   variable first" heuristic is what keeps the search fast — a piece
-   with only one legal spot left gets nailed down immediately instead of
-   the search wandering off exploring unrelated pieces first).
+   spots left, and try each of its placements in turn (this "most
+   constrained variable first" heuristic is what keeps the search fast —
+   a piece with only one legal spot left gets nailed down immediately
+   instead of the search wandering off exploring unrelated pieces first).
 3. If a component ever has **zero** legal spots left, that branch is a
    dead end — back up and try a different placement for whatever was
    placed just before it.
-4. Stop the instant every component has a placement. That's your answer:
-   yes it fits, and here's one way to do it.
+4. When every component has a placement, that's a valid full layout —
+   but instead of stopping there, remember it (if it beats the best one
+   seen so far) and keep searching, because a more-shielded layout might
+   still exist elsewhere in the search space.
+5. To keep that from being hopelessly slow, at every step it computes an
+   upper bound — "even in the best case, how much more shielding could
+   the remaining pieces possibly add?" — and abandons a branch outright
+   the moment that bound can't beat the best layout already found. This
+   is what makes "search everything" practical instead of exponential.
 
-There's a safety cap (`maxNodes`, default 300,000 search steps) so a
-pathological input can't hang the browser tab; it'll tell you if it hit
-the cap without a definitive answer, which should be rare for an 8x8
-grid with a normal-sized loadout.
+There's a safety cap (`maxNodes`, default 500,000 search steps) so a
+pathological input can't hang the browser tab. If it's hit, the solver
+still returns the best layout found so far — it just marks `optimal:
+false` on the result (surfaced in the UI as "search budget ran out")
+rather than claiming that layout is provably the most-shielded possible.
+Plain feasibility (question 1) is always answered correctly and quickly
+regardless — the cap only affects how hard it keeps looking for a
+*better* answer to question 2 after a valid one is already in hand.
 
 **Rotations:** every component can be rotated in 90° steps by default.
 If you learn a specific component can't rotate in-game (or can't rotate
@@ -110,22 +125,61 @@ flipping a piece (not just rotating it), that would need a
 `rotate90` in `solver.js` — flagging it here since it's the one geometric
 operation this version doesn't attempt.
 
-**"Prefer shielded" is a soft preference, not a hard rule.** Ticking it
-for a component just makes the search try shield-covering placements for
-that piece *first* — it can never make an otherwise-fitting loadout fail,
-and it doesn't run a full optimization pass over every possible solution
-to find the one with maximum shield coverage (that would be much slower
-for very little practical benefit). If you want a stricter or smarter
-shield rule, that logic lives in `candidatePlacements()` in `solver.js`.
+**What "shielded" actually means in-game** (confirmed by the developer on
+the Steam forums, not guessed): when your ship takes damage or hits an
+event like radiation, random grid squares can get knocked offline,
+cutting power to whatever's plugged into them. Blue/protected (`-2`)
+squares are immune to that — a component sitting fully on protected
+cells stays powered no matter what; one on a normal (`0`) cell can
+randomly drop mid-fight. So "prefer shielded" isn't a performance
+optimization, it's a reliability one: it's for components you can't
+afford to have cut out unexpectedly (weapons, sensors you depend on),
+not just a generic bonus to chase for every piece.
+
+**Shielding is optimized automatically, for everything, even with no
+boxes ticked.** You don't have to mark anything "prefer shielded" for the
+solver to make use of leftover shielded capacity — by default it already
+finds the fittable layout that covers the most shielded cells overall.
+Ticking "prefer shielded" on a specific component instance doesn't turn
+shielding on, it just makes that component's coverage count 1000x more
+in the scoring (`SHIELD_PRIORITY_WEIGHT` in `solver.js`), so if there's
+ever a tradeoff — only enough shielded cells for some components, not
+all — the flagged ones win that tradeoff first, and whatever shielded
+capacity is left over still gets used on everything else. It's still not
+a hard requirement (a flagged component can still be placed off-shield
+if that's the only way anything fits at all — feasibility always wins
+over shielding). If you want a genuine hard rule instead — e.g. a
+component must be *entirely* on protected cells or the layout should be
+rejected outright — that logic lives in `candidatePlacements()` in
+`solver.js`, and would mean filtering out any placement for that piece
+where `shieldCount` doesn't equal the piece's total cell count.
+
+The result panel shows exactly how much of the grid's shielded capacity
+got used (`covered / total`, as a %), and marks any placed component
+that landed on a shielded cell with a small white dot — since once a
+piece is drawn over a blue cell, the color underneath is otherwise
+invisible.
+
+**Reading the result grid at a glance:** each component keeps its own
+fill color (cycling through `PIECE_COLORS` in `app.js`), and is also
+outlined in a darkened version of that same color (`outlineColorForPieceId()`)
+along only the *outer* edge of its footprint — the border between two
+cells belonging to the same piece is deliberately left off, so a
+multi-cell component reads as one clearly-bounded shape rather than a
+row of same-colored squares. This is what makes it possible to tell two
+adjacent components apart quickly even when their fill colors end up
+close in hue (`PIECE_COLORS` only has 8 entries and cycles for bigger
+loadouts).
 
 ## Known simplifications / things worth revisiting
 
-- The original tool didn't document (and its dead backend can't be
-  inspected for) all of the actual in-game placement rules, so some of
-  the above — especially "prefer shielded" semantics and whether any
-  component genuinely cannot rotate — is a best-effort interpretation.
-  Treat mismatches with the real game as things to tune in `solver.js`
-  and `shapes.js`, not bugs in some deeper sense.
+- Placement geometry (shapes, rotation, overlap, blocked cells) is
+  inferred directly from the original tool's bundled data, so it should
+  be accurate. The shield mechanic's *meaning* is confirmed from the
+  developer's own Steam posts (see above). What's still a best-effort
+  guess is whether any specific component can't rotate freely in-game —
+  treat mismatches there as things to tune via `allowedRotations` in
+  `shapes.js`, not bugs in some deeper sense.
 - Reactor/generator ordering is auto-corrected (reactors always stack
   above generators) rather than depending on click order, since that
   matches how the ship is actually built.
