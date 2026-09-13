@@ -25,26 +25,57 @@ That means this rebuild fixes both problems at once: the shape data lives
 in one file you can edit, and the solver runs entirely in your browser,
 so there's no third-party service that can disappear on you again.
 
+**Update:** the game later changed its reactor/generator layouts too, on
+top of the component shapes. Rather than chase that a second time with
+another data table that can go stale again, the power grid is now
+painted by hand directly in the UI (see "The grid editor" below) —
+there's no reactor/generator picker anymore.
+
+**Update 2:** editing `data/shapes.js` by hand to add or fix a component
+still works, but there's now also an in-page way to do it — see "Adding
+components from the UI" below — which is generally the easier path
+unless you're comfortable with the raw JSON-ish syntax.
+
 ## Project layout
 
 ```
 index.html      the page structure
 style.css       styling
-data/shapes.js  ALL game data — reactor/generator grids, component shapes
+data/shapes.js  component shape data (+ unused legacy reactor/generator data, see below)
 solver.js       the placement search algorithm (the "engine")
-app.js          UI wiring: renders lists, tracks selections, calls the solver
+app.js          UI wiring: grid editor, component list + custom-component
+                editor, loadout tracking, calls the solver
 ```
 
-Nothing except `data/shapes.js` should need touching when the game
-updates a shape. If the *rules* change (e.g. mirroring becomes allowed,
-or a new grid size shows up), `solver.js` and `app.js` are where that
-logic lives.
+You don't need to touch `data/shapes.js` at all for a one-off new or
+changed component anymore — see "Adding components from the UI" below.
+Editing that file directly is still there for bulk changes, or for a
+component you want built into the project itself rather than saved per
+browser. If the *rules* change (e.g. mirroring becomes allowed, or the
+grid stops being 8x8), `solver.js` and `app.js` are where that logic
+lives.
+
+## The grid editor
+
+The power grid isn't assembled from any preset data anymore — you paint
+it by hand. Click a cell in the "Power grid" panel and it cycles:
+
+```
+blocked (gray) -> open (green) -> shielded (blue) -> blocked (gray) -> ...
+```
+
+It starts fully blocked. Paint it to match whatever your ship's reactor
++ generators currently produce in-game, then move on to picking
+components below. "Clear grid" resets every cell back to blocked if you
+want to start over. This state lives only in memory (`gridState` in
+`app.js`) — refreshing the page resets it, same as your component
+loadout.
 
 ## How the data is encoded
 
-**Reactors and generators** are 8-columns-wide blocks that get stacked to
-build the full 8x8 grid (one reactor, 4 rows, on top of up to two
-generators, 2 rows each). Cell values:
+**The grid** (whether hand-painted or, historically, assembled from the
+now-unused reactor/generator data in `data/shapes.js`) uses these cell
+values:
 
 | value | meaning |
 |---|---|
@@ -52,7 +83,7 @@ generators, 2 rows each). Cell values:
 | `-1` | blocked — nothing can be placed here |
 | `-2` | shielded / protected cell — also usable, and immune to random power loss (see below) |
 
-**Components** are small binary matrices:
+**Components** (in `data/shapes.js`) are small binary matrices:
 
 | value | meaning |
 |---|---|
@@ -62,11 +93,11 @@ generators, 2 rows each). Cell values:
 Row 0 of a matrix is always the top row. See the comment block at the top
 of `data/shapes.js` for the full walkthrough.
 
-## Updating a shape when the game changes it
+## Updating a component shape when the game changes it
 
 1. Open `data/shapes.js`.
-2. Find the reactor/generator/component by name (or add a new entry —
-   copy the shape of a similar one as a template).
+2. Find the component by name (or add a new entry — copy the shape of a
+   similar one as a template).
 3. Edit the `matrix`. Count rows top to bottom, columns left to right.
 4. Save, reload `index.html` in your browser. No build step, no restart.
 
@@ -74,6 +105,66 @@ If you're not sure of the exact new shape, an easy way to reverse it out is
 to open the browser dev tools console on this page and log the matrix
 while you experiment, or just count cells against a screenshot of the
 in-game grid.
+
+(There's nothing to update for the grid layout itself anymore — just
+paint it by hand each session.)
+
+## Adding components from the UI
+
+You don't have to hand-edit `data/shapes.js` to add a new or changed
+component — there's a built-in editor for that:
+
+1. Under the Components panel, click "+ Add custom component."
+2. Paint the shape on the 4x4 grid (4x4 is the largest footprint any
+   known component uses — click a cell to toggle it filled/empty).
+3. Give it a name, and a section — type an existing one (e.g. "Engines")
+   to slot it in alongside the built-ins of that type, or a brand new
+   name (e.g. "Prototype Weapons") to start a new section for it. The
+   text field autocompletes from sections that already exist.
+4. Click "Save component." It immediately shows up in the components
+   list with the same shape-grid icon every other component gets — that
+   icon is always generated straight from the matrix (`renderMiniShape()`
+   in `app.js`), so there's nothing special to draw for a custom one.
+
+**Where it's stored:** in this browser's `localStorage`, under the key
+`jumpSpaceCustomComponents` — not in `data/shapes.js`, and not on any
+server. That means it'll still be there the next time you open this page
+*in this same browser, on this same device* — closing the tab, closing
+the browser, restarting your computer, none of that clears it. What it
+does **not** do is follow you: open the page in a different browser,
+a different computer, or (importantly) after committing this project to
+GitHub Pages and opening the live URL from your phone, and your custom
+components won't be there, because `localStorage` never leaves the
+browser it was written in. If you want a custom component to be
+available everywhere, add it to `data/shapes.js` instead (or in addition
+— nothing stops you doing both) so it ships with the project itself.
+
+One more `localStorage` quirk worth knowing: it needs a stable origin to
+key itself against, and some browsers treat every `file://` page as its
+own origin (or an origin that resets between sessions), which can make
+custom components fail to persist when you open `index.html` by
+double-clicking it. If that happens, serve the folder instead of opening
+it directly — `npx serve .` (see "Running it" below) or GitHub Pages both
+give the page a real, consistent origin and `localStorage` behaves
+normally.
+
+**Deleting a custom component:** click "delete" next to it in the
+components list (only custom ones have this button — built-ins can only
+be changed by editing `data/shapes.js`). You'll get a confirmation
+prompt first since it can't be undone. Deleting one also removes any
+copies of it currently sitting in your loadout, so you're never left
+with a "ghost" component the solver can't find data for.
+
+Under the hood, a saved component looks exactly like a built-in one —
+`{ id, name, type, matrix, custom: true }` — plus the `custom` flag,
+which is only there so the UI knows to show the delete button and the
+"custom" label next to it. The shape you paint gets trimmed down to its
+smallest bounding box before saving (`trimMatrix()` in `app.js`): if you
+paint a single dot in the corner of the 4x4 editor, it's stored as a 1x1
+matrix, not a mostly-empty 4x4 one. This isn't just tidiness — an
+untrimmed matrix would make the solver reserve a larger footprint than
+the shape actually needs and wrongly refuse placements flush against a
+grid edge.
 
 ## How the solver works (`solver.js`)
 
@@ -180,11 +271,14 @@ loadouts).
   guess is whether any specific component can't rotate freely in-game —
   treat mismatches there as things to tune via `allowedRotations` in
   `shapes.js`, not bugs in some deeper sense.
-- Reactor/generator ordering is auto-corrected (reactors always stack
-  above generators) rather than depending on click order, since that
-  matches how the ship is actually built.
-- There's no persistence — refreshing the page clears your loadout. If
-  that becomes annoying, `app.js` is where to add `localStorage`.
+- There's no persistence — refreshing the page clears both your painted
+  grid and your loadout. If that becomes annoying, `app.js` is where to
+  add `localStorage` for `gridState` and `selectedInstances`.
+- Component selection is still the original list-based mechanic (click a
+  component to add an instance, tick "prefer shielded" per instance).
+  That's the next thing likely to need a rework if the game changes how
+  components are chosen or categorized — `renderComponentList()` and
+  `renderSelectedList()` in `app.js` are where that logic lives.
 
 ## Running it
 

@@ -15,31 +15,40 @@
 
 <main>
 
-  <section class="panel" id="reactor-panel">
-    <h2>1. Reactor &amp; Generators</h2>
-    <p class="hint">Pick one reactor (4 rows) and up to two generators (2 rows each) to build the 8&times;8 grid. Order doesn't matter — reactors are always stacked above generators.</p>
-    <div class="list" id="reactor-list"></div>
-    <div class="row-total" id="row-total"></div>
-  </section>
-
   <section class="panel" id="grid-panel">
-    <h2>2. Grid preview</h2>
-    <div class="grid" id="preview-grid"></div>
+    <h2>1. Power grid</h2>
+    <p class="hint">Click a cell to cycle it: blocked &rarr; open &rarr; shielded &rarr; blocked. Paint the grid to match whatever reactor/generator layout you've got in-game right now.</p>
+    <div class="grid editable" id="preview-grid"></div>
     <div class="legend">
       <span><i class="swatch open"></i> open</span>
       <span><i class="swatch shielded"></i> shielded</span>
       <span><i class="swatch blocked"></i> blocked</span>
     </div>
+    <button id="clear-grid-btn" class="secondary">Clear grid (reset all to blocked)</button>
   </section>
 
   <section class="panel" id="component-panel">
-    <h2>3. Components</h2>
+    <h2>2. Components</h2>
     <p class="hint">Click a component to add one to your loadout. Click it again to add another copy.</p>
     <div class="list" id="component-list"></div>
+
+    <button id="toggle-add-component-btn" class="secondary">+ Add custom component</button>
+    <div id="add-component-form" hidden>
+      <p class="hint">Paint the shape (max 4&times;4 — the largest any known component uses), name it, and give it a section. It's saved on this device and will show up here every time you open this page, until you delete it.</p>
+      <div class="shape-editor" id="new-component-grid"></div>
+      <input type="text" id="new-component-name" placeholder="Component name" class="text-input">
+      <input type="text" id="new-component-type" placeholder="Section (existing or new)" list="type-options" class="text-input">
+      <datalist id="type-options"></datalist>
+      <p class="hint" id="add-component-error" hidden></p>
+      <div class="button-row">
+        <button id="save-component-btn" class="primary">Save component</button>
+        <button id="cancel-add-component-btn" class="secondary">Close</button>
+      </div>
+    </div>
   </section>
 
   <section class="panel" id="selected-panel">
-    <h2>4. Your loadout</h2>
+    <h2>3. Your loadout</h2>
     <div class="list" id="selected-list"></div>
     <button id="solve-btn" class="primary">Check if this fits</button>
   </section>
@@ -55,8 +64,10 @@
 </main>
 
 <footer>
-  <p>
-      See <code>README.md</code> for how to keep this current.</p>
+  <p>Component shapes are captured in <code>data/shapes.js</code>, based on the community tool at
+     <a href="https://jump-space-grid-optimizer.vercel.app/" target="_blank" rel="noopener">jump-space-grid-optimizer.vercel.app</a>.
+     The power grid itself is now painted by hand (see above) rather than assembled from preset reactor/generator shapes.
+     See <code>README.md</code> for how to keep this current.</p>
 </footer>
 
 <script src="data/shapes.js"></script>

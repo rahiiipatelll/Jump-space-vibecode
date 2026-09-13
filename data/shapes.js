@@ -1,18 +1,28 @@
 /**
  * shapes.js — All game data lives here, and ONLY here.
  *
- * This is the file you edit when the game updates a component or reactor
- * shape. Nothing else in the project needs to change for a shape edit.
+ * This is the file you edit when the game updates a component shape.
+ * Nothing else in the project needs to change for a shape edit.
  *
  * ---------------------------------------------------------------------
- * REACTOR / GENERATOR grids
+ * REACTOR / GENERATOR grids — CURRENTLY UNUSED BY THE APP
  * ---------------------------------------------------------------------
- * Each reactor/generator is a fixed-width (8 columns) block of rows that
- * gets stacked with others to build the full 8x8 power grid. A "reactor"
- * is 4 rows tall, a "generator" is 2 rows tall. In the real game you pick
- * exactly one reactor plus up to two generators, which is why 4 + 2 + 2 = 8.
+ * The `reactors` array below is kept as reference data, but app.js no
+ * longer builds the power grid from it — the grid is now painted by hand
+ * in the UI (click a cell to cycle blocked/open/shielded), because the
+ * game's reactor/generator layouts changed and there was no way for this
+ * project to detect that automatically. See the note at the top of
+ * app.js if you want to bring back quick-select presets later using this
+ * data as a starting point.
  *
- * Cell values in a reactor/generator matrix:
+ * The encoding, if you do use it: each reactor/generator is a
+ * fixed-width (8 columns) block of rows that would get stacked with
+ * others to build the full 8x8 power grid. A "reactor" is 4 rows tall, a
+ * "generator" is 2 rows tall. In the real game you pick exactly one
+ * reactor plus up to two generators, which is why 4 + 2 + 2 = 8.
+ *
+ * Cell values in a reactor/generator matrix (same encoding the grid
+ * editor's cells use):
  *    0  -> open / powered cell. A component's filled cell CAN be placed here.
  *   -1  -> blocked / unpowered cell. Nothing can be placed here.
  *   -2  -> shielded (protected) cell. Also usable, but "special" — some
@@ -37,8 +47,10 @@
  * set this to [0] for that component.
  *
  * ---------------------------------------------------------------------
- * WHEN THE GAME UPDATES A SHAPE
+ * WHEN THE GAME UPDATES A COMPONENT SHAPE
  * ---------------------------------------------------------------------
+ * (The power grid layout itself doesn't need updating here anymore —
+ * just paint it by hand in the UI each time.)
  * 1. Find the new footprint (in-game screenshot, or the wiki at
  *    https://jumpship.wiki.gg/ — most component icons here came from there).
  * 2. Edit (or add) the matrix below. Row 0 is the top row.
